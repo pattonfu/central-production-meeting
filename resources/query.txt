@@ -1,0 +1,6 @@
+fetch spans, scanLimitGBytes: -1
+| filter contains(app, "central-") and app != "new-central-events-proxy"
+| expand span.events
+| fieldsFlatten span.events
+| filter isNotNull(span.events.exception.type) and isFalseOrNull(expected)
+| summarize {count(),min(start_time) }, by:{app, span.events.exception.message, span.events.exception.stack_trace}
