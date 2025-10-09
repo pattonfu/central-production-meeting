@@ -24,7 +24,6 @@ POLL_INTERVAL = 5
 FUZZY_RULES = [
     "Call entry with interaction_id='.*' not found",
     "Unexpected response status: 500 for post /calls-router/handoff/.*: #<OAuth2::Response:.*>",
-    "undefined method `.*' for nil:NilClass",
     "undefined method `.*' for #<.*>",
     "Request waited .*ms, then ran for longer than .*ms",
     "OpenSSL::SSL::SSLError: SSL_read: unexpected eof while reading .*",
@@ -63,13 +62,14 @@ agents = [
 ]
 
 
-def make_request(query, cookie, start_time_str, end_time_str):
+# type: 7-fetch 7 days or 1-fetch 1 day
+def make_request(query, cookie, csrftoken, start_time_str, end_time_str, type):
     # Execute DQL request
     api1_url = "https://wyv31614.live.dynatrace.com/rest/v2/logmonitoring/dql/query:execute"
     user_agent = random.choice(agents)
     api1_headers = {
         "User-Agent": user_agent,
-        "x-csrftoken": "727f7040-9c4a-4a3c-90de-a9dc98bfbdbb|11|prd-ad1e51f8-d5ac-4d71-9f2b-26d913b93775",
+        "x-csrftoken": csrftoken,
         "cookie": cookie,
     }
     api1_body = {
@@ -87,7 +87,9 @@ def make_request(query, cookie, start_time_str, end_time_str):
         response1.raise_for_status()
         api1_result = response1.json()
 
-        with open(f'{OUTPUT_DIR}/dql_request_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json', 'w') as f:
+        output_filename = f'{OUTPUT_DIR}/dql_result_for_{type}_days_{datetime.now().strftime("%m%d_%H%M")}.json'
+
+        with open(output_filename, 'w') as f:
             json.dump(api1_result, f, indent=4)
         request_token = api1_result.get("requestToken")
 
@@ -114,10 +116,10 @@ def make_request(query, cookie, start_time_str, end_time_str):
                     logging.info("DQL execution result succeeded.")
 
                     records = api2_result.get("result", {}).get("records", [])
-                    output_filename = f'{OUTPUT_DIR}/dql_result_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
                     with open(output_filename, 'w') as f:
                         json.dump(records, f, indent=4)
-                    analysis_timeframe = api2_result.get("result", {}).get("metadata", {}).get("trail", {}).get(
+
+                    analysis_timeframe = api2_result.get("result", {}).get("metadata", {}).get("grail", {}).get(
                         "analysisTimeframe", {})
                     start_ts = analysis_timeframe.get("start")
                     end_ts = analysis_timeframe.get("end")
@@ -125,7 +127,7 @@ def make_request(query, cookie, start_time_str, end_time_str):
                         duration = float(end_ts) - float(start_ts)
                         logging.info("Analysis timeframe: start=%s, end=%s, duration=%.2f seconds", start_ts, end_ts,
                                      duration)
-                    scanned_bytes = api2_result.get("result", {}).get("metadata", {}).get("trail", {}).get(
+                    scanned_bytes = api2_result.get("result", {}).get("metadata", {}).get("grail", {}).get(
                         "scannedBytes")
                     if scanned_bytes:
                         logging.info("Scanned data: %s bytes (%.2f GB)", scanned_bytes,
@@ -189,13 +191,21 @@ def handle_data(output_filename_7_days, output_filename_1_day=None):
             logging.warning("Found empty exception message, record: %s", record)
             break
         count = int(record.get("count()", 0))
+        app = record.get("app", "Unknown App")
+        message = record.get("span.events.exception.message", "No Exception Message") or ""
+        stacktrace = record.get("span.events.exception.stack_trace", "No Exception Stacktrace")
 
         if message in result:
-            result[message]["quantity_for_previous_day"] = count
+            if "quantity_for_previous_day" not in result[message]:
+                result[message]["quantity_for_previous_day"] = 0
+
+            result[message]["quantity_for_previous_day"] = result[message]["quantity_for_previous_day"] + count
+            result[message]["apps"].add(app)
+            result[message]["stacktraces"].add(stacktrace)
         else:
             result[message] = {
-                "apps": set(),
-                "stacktraces": set(),
+                "apps": {app},
+                "stacktraces": {stacktrace},
                 "total_count": 0,
                 "quantity_for_previous_day": count
             }
@@ -209,10 +219,10 @@ def handle_data(output_filename_7_days, output_filename_1_day=None):
                 "apps": set(),
                 "stacktraces": set(),
                 "raw_messages": set(),
-                "total_count": 0
+                "total_count": 0,
+                "quantity_for_previous_day": 0
             }
-            if "quantity_for_previous_day" in details:
-                categorized_result[new_message]["quantity_for_previous_day"] = 0
+
         categorized_result[new_message]["raw_messages"].add(message)
         categorized_result[new_message]["apps"].update(details["apps"])
         categorized_result[new_message]["stacktraces"].update(details["stacktraces"])
@@ -255,11 +265,13 @@ def main():
     log_file = setup_logging()
     logging.info(f"Log file: {log_file}")
 
-    # Read query and cookie from resources
+    # Read query, cookie and csrftoken from resources
     with open('resources/query.txt', 'r', encoding='utf-8') as f:
         query = f.read()
     with open('resources/cookie.txt', 'r', encoding='utf-8') as f:
         cookie = f.read()
+    with open('resources/csrftoken.txt', 'r', encoding='utf-8') as f:
+        csrftoken = f.read().strip()
     if not query or not cookie:
         logging.error("query or cookie is empty, please check resources/query.txt and resources/cookie.txt.")
     logging.info("Read query and cookie.")
@@ -269,12 +281,12 @@ def main():
     start_time = end_time - timedelta(days=7)
     end_time_str = end_time.strftime("%Y-%m-%dT%H:%M:%S.000")
     start_time_str = start_time.strftime("%Y-%m-%dT%H:%M:%S.000")
-    output_filename_7_days = make_request(query, cookie, start_time_str, end_time_str)
+    output_filename_7_days = make_request(query, cookie, csrftoken, start_time_str, end_time_str, 7)
 
     # Get data for the past 1 day
     start_time_1_day = end_time - timedelta(days=1)
     start_time_str_1_day = start_time_1_day.strftime("%Y-%m-%dT%H:%M:%S.000")
-    output_filename_1_day = make_request(query, cookie, start_time_str_1_day, end_time_str)
+    output_filename_1_day = make_request(query, cookie, csrftoken, start_time_str_1_day, end_time_str, 1)
 
     if not output_filename_7_days or not output_filename_1_day:
         logging.error("Request did not complete successfully, cannot process data.")
@@ -284,7 +296,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
 
     # TODO test
-    # handle_data("output/dql_result_20250929_144028.json", "output/dql_result_20250929_144044.json")
+    handle_data("output/dql_result_for_7_days_1009_1436.json", "output/dql_result_for_1_days_1009_1441.json")
