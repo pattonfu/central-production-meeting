@@ -33,6 +33,8 @@ FUZZY_RULES = [
     "Could not find call_flow_class for .*",
     "Cannot dial sip:.*reason: add external contact only supports phone numbers",
     "CallQueueEvictor couldn't continue the waiting flow for call .*",
+    # Unable to redirect call CA3fefa01bd417d244e1fa1c21bd88a105: 400 - [400] {"code"=>20001, "message"=>"Bad Request", "more_info"=>"https://www.twilio.com/docs/errors/20001", "status"=>400}
+    "Unable to redirect call .*"
 ]
 
 
@@ -62,8 +64,7 @@ agents = [
 ]
 
 
-# type: 7-fetch 7 days or 1-fetch 1 day
-def make_request(query, cookie, csrftoken, start_time_str, end_time_str, type):
+def make_request(query, cookie, csrftoken, start_time_str, end_time_str, day_num):
     # Execute DQL request
     api1_url = "https://wyv31614.live.dynatrace.com/rest/v2/logmonitoring/dql/query:execute"
     user_agent = random.choice(agents)
@@ -87,10 +88,8 @@ def make_request(query, cookie, csrftoken, start_time_str, end_time_str, type):
         response1.raise_for_status()
         api1_result = response1.json()
 
-        output_filename = f'{OUTPUT_DIR}/dql_result_for_{type}_days_{datetime.now().strftime("%m%d_%H%M")}.json'
+        output_filename = f'{OUTPUT_DIR}/dql_result_for_day_{day_num}.json'
 
-        with open(output_filename, 'w') as f:
-            json.dump(api1_result, f, indent=4)
         request_token = api1_result.get("requestToken")
 
         logging.info("DQL execution request succeeded, response saved, requestToken=%s", request_token)
@@ -119,19 +118,18 @@ def make_request(query, cookie, csrftoken, start_time_str, end_time_str, type):
                     with open(output_filename, 'w') as f:
                         json.dump(records, f, indent=4)
 
-                    analysis_timeframe = api2_result.get("result", {}).get("metadata", {}).get("grail", {}).get(
-                        "analysisTimeframe", {})
-                    start_ts = analysis_timeframe.get("start")
-                    end_ts = analysis_timeframe.get("end")
-                    if start_ts and end_ts:
-                        duration = float(end_ts) - float(start_ts)
-                        logging.info("Analysis timeframe: start=%s, end=%s, duration=%.2f seconds", start_ts, end_ts,
-                                     duration)
+                    execution_time_milliseconds = api2_result.get("result", {}).get("metadata", {}).get("grail",
+                                                                                                        {}).get(
+                        "executionTimeMilliseconds", {})
+                    if execution_time_milliseconds:
+                        # execution_time_milliseconds转为min
+                        logging.info("Analysis timeframe duration: %.2f Mins", execution_time_milliseconds / 60000)
                     scanned_bytes = api2_result.get("result", {}).get("metadata", {}).get("grail", {}).get(
                         "scannedBytes")
                     if scanned_bytes:
-                        logging.info("Scanned data: %s bytes (%.2f GB)", scanned_bytes,
-                                     int(scanned_bytes) / (1024 ** 3))
+                        # Convert bytes to TB for logging
+                        scanned_tb = scanned_bytes / (1024 ** 4)
+                        logging.info("Scanned data size: %.2f TB", scanned_tb)
 
                     logging.info("DQL execution result saved to %s", output_filename)
                     return output_filename
@@ -151,20 +149,31 @@ def make_request(query, cookie, csrftoken, start_time_str, end_time_str, type):
     return None
 
 
-def handle_data(output_filename_7_days, output_filename_1_day=None):
-    # Load JSON data from files (list)
-    with open(output_filename_7_days, 'r', encoding='utf-8') as f:
-        data_7_days = json.load(f)
-    with open(output_filename_1_day, 'r', encoding='utf-8') as f:
-        data_1_day = json.load(f) if output_filename_1_day else []
-    if not data_7_days and not data_1_day:
-        logging.warning("Result files are empty, no data to process.")
+def handle_data():
+    # 汇总：把output里面的所有json文件汇总
+    output_filename_7_days = f"{OUTPUT_DIR}/dql_result_for_7_days_{datetime.now().strftime('%m%d_%H%M')}.json"
+    all_records = []
+    last_1_day = []
+    for i in range(7):
+        temp_filename = f'{OUTPUT_DIR}/dql_result_for_day_{i + 1}.json'
+        if os.path.exists(temp_filename):
+            with open(temp_filename, 'r', encoding='utf-8') as f:
+                records = json.load(f)
+                all_records.extend(records)
+                if i == 6:
+                    last_1_day = records
+    with open(output_filename_7_days, 'w', encoding='utf-8') as f:
+        json.dump(all_records, f, indent=4)
+
+    if not all_records:
+        logging.error("No data fetched for the past 7 days, exiting.")
         return
 
-    logging.info(f"Read {len(data_7_days)} records for 7 days, {len(data_1_day)} records for 1 day.")
+    logging.info(f"Aggregated data for 7 days saved to {output_filename_7_days}, total records: {len(all_records)}")
+
     # Process data: group by span.events.exception.message, merge unique app and stacktrace values, sum count()
     result = {}
-    for record in data_7_days:
+    for record in all_records:
         app = record.get("app", "Unknown App")
         message = record.get("span.events.exception.message", "No Exception Message") or ""
         stacktrace = record.get("span.events.exception.stack_trace", "No Exception Stacktrace") or ""
@@ -185,7 +194,7 @@ def handle_data(output_filename_7_days, output_filename_1_day=None):
         result[message]["stacktraces"].add(stacktrace)
         result[message]["total_count"] += count
 
-    for record in data_1_day:
+    for record in last_1_day:
         message = record.get("span.events.exception.message", "No Exception Message") or ""
         if message == "":
             logging.warning("Found empty exception message, record: %s", record)
@@ -210,7 +219,7 @@ def handle_data(output_filename_7_days, output_filename_1_day=None):
                 "quantity_for_previous_day": count
             }
 
-    # Fuzzy classification of messages
+    # Aggregating classification of messages
     categorized_result = {}
     for message, details in result.items():
         new_message = apply_fuzzy_rules(message)
@@ -279,24 +288,19 @@ def main():
     # Get data for the past 7 days
     end_time = datetime.now()
     start_time = end_time - timedelta(days=7)
-    end_time_str = end_time.strftime("%Y-%m-%dT%H:%M:%S.000")
-    start_time_str = start_time.strftime("%Y-%m-%dT%H:%M:%S.000")
-    output_filename_7_days = make_request(query, cookie, csrftoken, start_time_str, end_time_str, 7)
 
-    # Get data for the past 1 day
-    start_time_1_day = end_time - timedelta(days=1)
-    start_time_str_1_day = start_time_1_day.strftime("%Y-%m-%dT%H:%M:%S.000")
-    output_filename_1_day = make_request(query, cookie, csrftoken, start_time_str_1_day, end_time_str, 1)
+    # 循环7次，分别对应7天的时间区间的数据，然后汇总
+    for i in range(7):
+        start_time_str = (start_time + timedelta(days=i)).strftime("%Y-%m-%dT%H:%M:%S.000")
+        end_time_str = (start_time + timedelta(days=i + 1)).strftime("%Y-%m-%dT%H:%M:%S.000")
 
-    if not output_filename_7_days or not output_filename_1_day:
-        logging.error("Request did not complete successfully, cannot process data.")
-    else:
-        logging.info("Request completed successfully, results saved.")
-        handle_data(output_filename_7_days, output_filename_1_day)
+        logging.info(f"Fetching data for day {i + 1}: {start_time_str} to {end_time_str}")
+        temp_filename = make_request(query, cookie, csrftoken, start_time_str, end_time_str, i + 1)
+        logging.info(f"Data for day {i + 1} saved to {temp_filename}")
+
+    handle_data()
 
 
 if __name__ == "__main__":
-    # main()
-
-    # TODO test
-    handle_data("output/dql_result_for_7_days_1009_1436.json", "output/dql_result_for_1_days_1009_1441.json")
+    main()
+    # handle_data()
