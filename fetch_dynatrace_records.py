@@ -13,11 +13,19 @@ import requests
 
 ##################### Global Variables Start #####################
 
-OUTPUT_DIR = "output"
+#  TODO test
+# TODAY_STR = "20251014"
+TODAY_STR = datetime.now().strftime('%Y%m%d')
+
+LAST_DAY_STR = (datetime.now() - timedelta(days=1)).strftime('%Y%m%d')
+
+OUTPUT_DIR = f"output/{TODAY_STR}"
+LAST_OUTPUT_DIR = f"output/{LAST_DAY_STR}"
+
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Polling interval for query results (seconds)
-POLL_INTERVAL = 5
+POLL_INTERVAL = 10
 
 # Classification rules for exception messages, defined as regex patterns
 # Rules can be extended as needed. Based on Exception Message in output/summary.xlsx
@@ -34,7 +42,9 @@ FUZZY_RULES = [
     "Cannot dial sip:.*reason: add external contact only supports phone numbers",
     "CallQueueEvictor couldn't continue the waiting flow for call .*",
     # Unable to redirect call CA3fefa01bd417d244e1fa1c21bd88a105: 400 - [400] {"code"=>20001, "message"=>"Bad Request", "more_info"=>"https://www.twilio.com/docs/errors/20001", "status"=>400}
-    "Unable to redirect call .*"
+    "Unable to redirect call .*",
+    "No primary server is available in cluster: #<Cluster topology=ReplicaSetNoPrimary.*",
+    "The socket took over .* seconds to connect .*"
 ]
 
 
@@ -43,7 +53,8 @@ FUZZY_RULES = [
 
 def setup_logging():
     """Configure logging to file and console."""
-    log_filename = f"log_{datetime.now().strftime('%Y%m%d')}.log"
+    os.makedirs('logs', exist_ok=True)
+    log_filename = f"logs/log_{TODAY_STR}.log"
     logging.basicConfig(
         level=logging.INFO,
         handlers=[
@@ -122,7 +133,7 @@ def make_request(query, cookie, csrftoken, start_time_str, end_time_str, day_num
                                                                                                         {}).get(
                         "executionTimeMilliseconds", {})
                     if execution_time_milliseconds:
-                        # execution_time_milliseconds转为min
+                        # Convert executionTimeMilliseconds to minutes
                         logging.info("Analysis timeframe duration: %.2f Mins", execution_time_milliseconds / 60000)
                     scanned_bytes = api2_result.get("result", {}).get("metadata", {}).get("grail", {}).get(
                         "scannedBytes")
@@ -150,8 +161,8 @@ def make_request(query, cookie, csrftoken, start_time_str, end_time_str, day_num
 
 
 def handle_data():
-    # 汇总：把output里面的所有json文件汇总
-    output_filename_7_days = f"{OUTPUT_DIR}/dql_result_for_7_days_{datetime.now().strftime('%m%d_%H%M')}.json"
+    # Aggregate: combine all JSON files in the output directory
+    output_filename_7_days = f"{OUTPUT_DIR}/dql_result_for_7_days_{TODAY_STR}.json"
     all_records = []
     last_1_day = []
     for i in range(7):
@@ -168,6 +179,16 @@ def handle_data():
     if not all_records:
         logging.error("No data fetched for the past 7 days, exiting.")
         return
+
+    # fetch the last day's dql_result_for_7_days_*.json data, if no exists, use empty list
+    output_filename_7_days_yesterday_data = []
+    with open(f"{LAST_OUTPUT_DIR}/dql_result_for_7_days_{LAST_DAY_STR}.json", 'r', encoding='utf-8') as f:
+        output_filename_7_days_yesterday_data = json.load(f)
+
+    output_filename_1_days_yesterday_data = []
+    if os.path.exists(f"{LAST_OUTPUT_DIR}/dql_result_for_day_7.json"):
+        with open(f"{LAST_OUTPUT_DIR}/dql_result_for_day_7.json", 'r', encoding='utf-8') as f:
+            output_filename_1_days_yesterday_data = json.load(f)
 
     logging.info(f"Aggregated data for 7 days saved to {output_filename_7_days}, total records: {len(all_records)}")
 
@@ -187,12 +208,37 @@ def handle_data():
             result[message] = {
                 "apps": set(),
                 "stacktraces": set(),
-                "total_count": 0
+                "total_count": 0,
+                "pre_total_count": 0
             }
+
+        # set the pre_total_count from output_filename_7_days_yesterday_data
+        for rec in output_filename_7_days_yesterday_data:
+            if rec.get("span.events.exception.message", "No Exception Message") == message and not rec.get(
+                    "has_pre_total_count", False):
+                result[message]["pre_total_count"] = int(rec.get("count()", 0)) + result[message].get("pre_total_count",
+                                                                                                      0)
+                # make a flag to indicate that pre total_count has the value
+                rec["has_pre_total_count"] = True
 
         result[message]["apps"].add(app)
         result[message]["stacktraces"].add(stacktrace)
         result[message]["total_count"] += count
+
+    # filter output_filename_7_days_yesterday_data has_pre_total_count == False datas, and add them to result with total_count = 0
+    for rec in output_filename_7_days_yesterday_data:
+        if not rec.get("has_pre_total_count", False):
+            message = rec.get("span.events.exception.message", "No Exception Message") or ""
+            if message not in result:
+                result[message] = {
+                    "apps": set(),
+                    "stacktraces": set(),
+                    "total_count": 0,
+                    "pre_total_count": 0
+                }
+            result[message]["pre_total_count"] = int(rec.get("count()", 0)) + result[message].get("pre_total_count", 0)
+            result[message]["apps"].add(rec.get("app", "Unknown App"))
+            result[message]["stacktraces"].add(rec.get("span.events.exception.stack_trace", "No Exception Stacktrace"))
 
     for record in last_1_day:
         message = record.get("span.events.exception.message", "No Exception Message") or ""
@@ -203,6 +249,17 @@ def handle_data():
         app = record.get("app", "Unknown App")
         message = record.get("span.events.exception.message", "No Exception Message") or ""
         stacktrace = record.get("span.events.exception.stack_trace", "No Exception Stacktrace")
+
+        # set the pre_count from output_filename_1_days_yesterday_data
+        is_new = True
+        for rec in output_filename_1_days_yesterday_data:
+            if rec.get("span.events.exception.message", "No Exception Message") == message and not rec.get(
+                    "has_pre_quantity_for_previous_day", False):
+                result[message]["pre_quantity_for_previous_day"] = int(rec.get("count()", 0)) + result[message].get(
+                    "pre_quantity_for_previous_day", 0)
+                # make a flag to indicate that pre_quantity_for_previous_day has the value
+                rec["has_pre_quantity_for_previous_day"] = True
+                is_new = False
 
         if message in result:
             if "quantity_for_previous_day" not in result[message]:
@@ -219,6 +276,9 @@ def handle_data():
                 "quantity_for_previous_day": count
             }
 
+        if is_new:
+            result[message]["is_new"] = True
+
     # Aggregating classification of messages
     categorized_result = {}
     for message, details in result.items():
@@ -229,13 +289,20 @@ def handle_data():
                 "stacktraces": set(),
                 "raw_messages": set(),
                 "total_count": 0,
-                "quantity_for_previous_day": 0
+                "pre_total_count": 0,
+                "quantity_for_previous_day": 0,
+                "pre_quantity_for_previous_day": 0
             }
 
         categorized_result[new_message]["raw_messages"].add(message)
         categorized_result[new_message]["apps"].update(details["apps"])
         categorized_result[new_message]["stacktraces"].update(details["stacktraces"])
         categorized_result[new_message]["total_count"] += details["total_count"]
+        categorized_result[new_message]["pre_total_count"] += details.get("pre_total_count", 0)
+        if "pre_quantity_for_previous_day" in details:
+            if "pre_quantity_for_previous_day" not in categorized_result[new_message]:
+                categorized_result[new_message]["pre_quantity_for_previous_day"] = 0
+            categorized_result[new_message]["pre_quantity_for_previous_day"] += details["pre_quantity_for_previous_day"]
         if "quantity_for_previous_day" in details:
             if "quantity_for_previous_day" not in categorized_result[new_message]:
                 categorized_result[new_message]["quantity_for_previous_day"] = 0
@@ -248,13 +315,27 @@ def handle_data():
     # Output to Excel file
     output_data = []
     for message, details in sorted_result:
+        # consider the None/empty for exception stacktrace
+        if not details["stacktraces"]:
+            details["stacktraces"] = {""}
+        if not details["raw_messages"]:
+            details["raw_messages"] = {""}
+        # replace None with string ""
+        details["apps"] = {app if app is not None else "" for app in details["apps"]}
+        details["stacktraces"] = {st if st is not None else "" for st in details["stacktraces"]}
+        details["raw_messages"] = {rm if rm is not None else "" for rm in details["raw_messages"]}
+
         output_data.append({
             "app": ", ".join(details["apps"]),
-            "exception message(exp)": message,
+            "exception message(exp)": message.replace(".*", "******"),
             "raw messages": "\n\n".join(details["raw_messages"]),
             "exception stacktrace": "\n\n".join(details["stacktraces"]),
-            "quantity": details["total_count"],
-            "quantity for the previous day": details.get("quantity_for_previous_day", 0)
+            "quantity": str(details["total_count"]) + "\n" + (
+                f"prev: {str(details['pre_total_count'])}" if details.get("pre_total_count") else "prev 0"),
+            "quantity for the previous day": str(details.get("quantity_for_previous_day", 0)) + "\n" + (
+                f"prev: {str(details['pre_quantity_for_previous_day'])}" if details.get(
+                    "pre_quantity_for_previous_day") else "prev 0"),
+            "is_new": "Yes" if details.get("is_new") else ""
         })
     df = pd.DataFrame(output_data)
     excel_filename = f"{OUTPUT_DIR}/summary.xlsx"
@@ -264,7 +345,7 @@ def handle_data():
 
 def apply_fuzzy_rules(message):
     for rule in FUZZY_RULES:
-        if re.fullmatch(rule, message):
+        if re.fullmatch(rule, message.strip()):
             return rule
     return message
 
@@ -278,18 +359,18 @@ def main():
     with open('resources/query.txt', 'r', encoding='utf-8') as f:
         query = f.read()
     with open('resources/cookie.txt', 'r', encoding='utf-8') as f:
-        cookie = f.read()
+        cookie = f.read().strip()
     with open('resources/csrftoken.txt', 'r', encoding='utf-8') as f:
         csrftoken = f.read().strip()
     if not query or not cookie:
         logging.error("query or cookie is empty, please check resources/query.txt and resources/cookie.txt.")
     logging.info("Read query and cookie.")
 
-    # Get data for the past 7 days
-    end_time = datetime.now()
-    start_time = end_time - timedelta(days=7)
+    # Get data for the past 7 days TODO
+    end_time = datetime.now() - timedelta(days=1)
+    start_time = end_time - timedelta(days=8)
 
-    # 循环7次，分别对应7天的时间区间的数据，然后汇总
+    # Loop 7 times over consecutive 1-day windows and then aggregate
     for i in range(7):
         start_time_str = (start_time + timedelta(days=i)).strftime("%Y-%m-%dT%H:%M:%S.000")
         end_time_str = (start_time + timedelta(days=i + 1)).strftime("%Y-%m-%dT%H:%M:%S.000")
@@ -302,5 +383,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
-    # handle_data()
+    # main()
+    handle_data()
