@@ -11,9 +11,9 @@ from urllib.parse import urlencode
 import pandas as pd
 import requests
 
-##################### Global Variables Start #####################
+##################### 全局变量开始 #####################
 
-#  TODO test
+#  TODO 测试
 # TODAY_STR = "20251014"
 TODAY_STR = datetime.now().strftime('%Y%m%d')
 
@@ -24,11 +24,11 @@ LAST_OUTPUT_DIR = f"output/{LAST_DAY_STR}"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Polling interval for query results (seconds)
+# 查询结果轮询间隔（秒）
 POLL_INTERVAL = 10
 
-# Classification rules for exception messages, defined as regex patterns
-# Rules can be extended as needed. Based on Exception Message in output/summary.xlsx
+# 异常消息的分类规则，定义为正则表达式模式
+# 可以根据需要扩展规则
 FUZZY_RULES = [
     "Call entry with interaction_id='.*' not found",
     "Unexpected response status: 500 for post /calls-router/handoff/.*: #<OAuth2::Response:.*>",
@@ -48,11 +48,11 @@ FUZZY_RULES = [
 ]
 
 
-##################### Global Variables End #####################
+##################### 全局变量结束 #####################
 
 
 def setup_logging():
-    """Configure logging to file and console."""
+    """配置日志记录到文件和控制台。"""
     os.makedirs('logs', exist_ok=True)
     log_filename = f"logs/log_{TODAY_STR}.log"
     logging.basicConfig(
@@ -66,7 +66,7 @@ def setup_logging():
     return log_filename
 
 
-# User-Agent list
+# 用户代理列表
 agents = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -76,7 +76,7 @@ agents = [
 
 
 def make_request(query, cookie, csrftoken, start_time_str, end_time_str, day_num):
-    # Execute DQL request
+    # 执行 DQL 请求
     api1_url = "https://wyv31614.live.dynatrace.com/rest/v2/logmonitoring/dql/query:execute"
     user_agent = random.choice(agents)
     api1_headers = {
@@ -94,7 +94,7 @@ def make_request(query, cookie, csrftoken, start_time_str, end_time_str, day_num
     }
 
     try:
-        logging.info("Sending DQL execution request...")
+        logging.info("正在发送 DQL 执行请求...")
         response1 = requests.post(api1_url, headers=api1_headers, json=api1_body)
         response1.raise_for_status()
         api1_result = response1.json()
@@ -103,12 +103,12 @@ def make_request(query, cookie, csrftoken, start_time_str, end_time_str, day_num
 
         request_token = api1_result.get("requestToken")
 
-        logging.info("DQL execution request succeeded, response saved, requestToken=%s", request_token)
+        logging.info("DQL 执行请求成功，响应已保存，requestToken=%s", request_token)
         if not request_token:
-            logging.error("No requestToken found in DQL execution response.")
+            logging.error("DQL 执行响应中未找到 requestToken。")
             return None
 
-        # Poll for execution result
+        # 轮询执行结果
         request_token = urlencode({'': request_token})[1:]
         api2_url = f"https://wyv31614.live.dynatrace.com/rest/v2/logmonitoring/dql/query:poll?request-token={request_token}&request-timeout-milliseconds=30000"
         start_time = datetime.now()
@@ -116,14 +116,14 @@ def make_request(query, cookie, csrftoken, start_time_str, end_time_str, day_num
 
         while datetime.now() - start_time < timeout:
             try:
-                logging.info("Polling for DQL execution result...")
+                logging.info("正在轮询 DQL 执行结果...")
                 response2 = requests.get(api2_url, headers=api1_headers)
                 response2.raise_for_status()
                 api2_result = response2.json()
 
                 state = api2_result.get("state")
                 if state == "SUCCEEDED":
-                    logging.info("DQL execution result succeeded.")
+                    logging.info("DQL 执行结果成功。")
 
                     records = api2_result.get("result", {}).get("records", [])
                     with open(output_filename, 'w') as f:
@@ -133,35 +133,35 @@ def make_request(query, cookie, csrftoken, start_time_str, end_time_str, day_num
                                                                                                         {}).get(
                         "executionTimeMilliseconds", {})
                     if execution_time_milliseconds:
-                        # Convert executionTimeMilliseconds to minutes
-                        logging.info("Analysis timeframe duration: %.2f Mins", execution_time_milliseconds / 60000)
+                        # 将执行时间毫秒转换为分钟
+                        logging.info("分析时间范围持续时间：%.2f 分钟", execution_time_milliseconds / 60000)
                     scanned_bytes = api2_result.get("result", {}).get("metadata", {}).get("grail", {}).get(
                         "scannedBytes")
                     if scanned_bytes:
-                        # Convert bytes to TB for logging
+                        # 将字节转换为 TB 用于日志记录
                         scanned_tb = scanned_bytes / (1024 ** 4)
-                        logging.info("Scanned data size: %.2f TB", scanned_tb)
+                        logging.info("扫描数据大小：%.2f TB", scanned_tb)
 
-                    logging.info("DQL execution result saved to %s", output_filename)
+                    logging.info("DQL 执行结果已保存到 %s", output_filename)
                     return output_filename
 
-                logging.info(f"DQL execution state: {state}. Retrying in {POLL_INTERVAL} seconds...")
+                logging.info(f"DQL 执行状态：{state}。{POLL_INTERVAL} 秒后重试...")
                 time.sleep(POLL_INTERVAL)
 
             except requests.RequestException as e:
-                logging.error(f"Error polling DQL execution result: {traceback.print_exc()}")
+                logging.error(f"轮询 DQL 执行结果时出错：{traceback.print_exc()}")
 
-        logging.error("Polling DQL execution result timed out after 6 minutes.")
+        logging.error("轮询 DQL 执行结果在 6 分钟后超时。")
 
     except requests.RequestException as e:
-        logging.error(f"Error executing DQL request: {e}")
+        logging.error(f"执行 DQL 请求时出错：{e}")
         logging.error(traceback.format_exc())
 
     return None
 
 
 def handle_data():
-    # Aggregate: combine all JSON files in the output directory
+    # 聚合：合并输出目录中的所有 JSON 文件
     output_filename_7_days = f"{OUTPUT_DIR}/dql_result_for_7_days_{TODAY_STR}.json"
     all_records = []
     last_1_day = []
@@ -177,22 +177,23 @@ def handle_data():
         json.dump(all_records, f, indent=4)
 
     if not all_records:
-        logging.error("No data fetched for the past 7 days, exiting.")
+        logging.error("过去 7 天没有获取到数据，程序退出。")
         return
 
-    # fetch the last day's dql_result_for_7_days_*.json data, if no exists, use empty list
+    # 获取上一天的 dql_result_for_7_days_*.json 数据，如果不存在则使用空列表
     output_filename_7_days_yesterday_data = []
-    with open(f"{LAST_OUTPUT_DIR}/dql_result_for_7_days_{LAST_DAY_STR}.json", 'r', encoding='utf-8') as f:
-        output_filename_7_days_yesterday_data = json.load(f)
+    if os.path.exists(f"{LAST_OUTPUT_DIR}/dql_result_for_7_days_{LAST_DAY_STR}.json"):
+        with open(f"{LAST_OUTPUT_DIR}/dql_result_for_7_days_{LAST_DAY_STR}.json", 'r', encoding='utf-8') as f:
+            output_filename_7_days_yesterday_data = json.load(f)
 
     output_filename_1_days_yesterday_data = []
     if os.path.exists(f"{LAST_OUTPUT_DIR}/dql_result_for_day_7.json"):
         with open(f"{LAST_OUTPUT_DIR}/dql_result_for_day_7.json", 'r', encoding='utf-8') as f:
             output_filename_1_days_yesterday_data = json.load(f)
 
-    logging.info(f"Aggregated data for 7 days saved to {output_filename_7_days}, total records: {len(all_records)}")
+    logging.info(f"7 天的聚合数据已保存到 {output_filename_7_days}，总记录数：{len(all_records)}")
 
-    # Process data: group by span.events.exception.message, merge unique app and stacktrace values, sum count()
+    # 处理数据：按 span.events.exception.message 分组，合并唯一的应用和堆栈跟踪值，求和 count()
     result = {}
     for record in all_records:
         app = record.get("app", "Unknown App")
@@ -201,7 +202,7 @@ def handle_data():
         count = int(record.get("count()", 0))
 
         if message == "":
-            logging.warning("Found empty exception message, record: %s", record)
+            logging.warning("发现空异常消息，记录：%s", record)
             break
 
         if message not in result:
@@ -212,20 +213,20 @@ def handle_data():
                 "pre_total_count": 0
             }
 
-        # set the pre_total_count from output_filename_7_days_yesterday_data
+        # 从 output_filename_7_days_yesterday_data 设置 pre_total_count
         for rec in output_filename_7_days_yesterday_data:
             if rec.get("span.events.exception.message", "No Exception Message") == message and not rec.get(
                     "has_pre_total_count", False):
                 result[message]["pre_total_count"] = int(rec.get("count()", 0)) + result[message].get("pre_total_count",
                                                                                                       0)
-                # make a flag to indicate that pre total_count has the value
+                # 设置标志以指示 pre_total_count 有值
                 rec["has_pre_total_count"] = True
 
         result[message]["apps"].add(app)
         result[message]["stacktraces"].add(stacktrace)
         result[message]["total_count"] += count
 
-    # filter output_filename_7_days_yesterday_data has_pre_total_count == False datas, and add them to result with total_count = 0
+    # 筛选 output_filename_7_days_yesterday_data 中 has_pre_total_count == False 的数据，并将其添加到 result 中，total_count = 0
     for rec in output_filename_7_days_yesterday_data:
         if not rec.get("has_pre_total_count", False):
             message = rec.get("span.events.exception.message", "No Exception Message") or ""
@@ -243,21 +244,21 @@ def handle_data():
     for record in last_1_day:
         message = record.get("span.events.exception.message", "No Exception Message") or ""
         if message == "":
-            logging.warning("Found empty exception message, record: %s", record)
+            logging.warning("发现空异常消息，记录：%s", record)
             break
         count = int(record.get("count()", 0))
         app = record.get("app", "Unknown App")
         message = record.get("span.events.exception.message", "No Exception Message") or ""
         stacktrace = record.get("span.events.exception.stack_trace", "No Exception Stacktrace")
 
-        # set the pre_count from output_filename_1_days_yesterday_data
+        # 从 output_filename_1_days_yesterday_data 设置 pre_count
         is_new = True
         for rec in output_filename_1_days_yesterday_data:
             if rec.get("span.events.exception.message", "No Exception Message") == message and not rec.get(
                     "has_pre_quantity_for_previous_day", False):
                 result[message]["pre_quantity_for_previous_day"] = int(rec.get("count()", 0)) + result[message].get(
                     "pre_quantity_for_previous_day", 0)
-                # make a flag to indicate that pre_quantity_for_previous_day has the value
+                # 设置标志以指示 pre_quantity_for_previous_day 有值
                 rec["has_pre_quantity_for_previous_day"] = True
                 is_new = False
 
@@ -279,7 +280,7 @@ def handle_data():
         if is_new:
             result[message]["is_new"] = True
 
-    # Aggregating classification of messages
+    # 聚合消息分类
     categorized_result = {}
     for message, details in result.items():
         new_message = apply_fuzzy_rules(message)
@@ -308,19 +309,19 @@ def handle_data():
                 categorized_result[new_message]["quantity_for_previous_day"] = 0
             categorized_result[new_message]["quantity_for_previous_day"] += details["quantity_for_previous_day"]
     result = categorized_result
-    logging.info(f"After classification, there are {len(result)} types of exception messages.")
+    logging.info(f"分类后，有 {len(result)} 种异常消息类型。")
 
-    # Convert result to list and sort
+    # 将结果转换为列表并排序
     sorted_result = sorted(result.items(), key=lambda x: x[1]["stacktraces"], reverse=True)
-    # Output to Excel file
+    # 输出到 Excel 文件
     output_data = []
     for message, details in sorted_result:
-        # consider the None/empty for exception stacktrace
+        # 考虑异常堆栈跟踪的 None/空值
         if not details["stacktraces"]:
             details["stacktraces"] = {""}
         if not details["raw_messages"]:
             details["raw_messages"] = {""}
-        # replace None with string ""
+        # 将 None 替换为字符串 ""
         details["apps"] = {app if app is not None else "" for app in details["apps"]}
         details["stacktraces"] = {st if st is not None else "" for st in details["stacktraces"]}
         details["raw_messages"] = {rm if rm is not None else "" for rm in details["raw_messages"]}
@@ -340,7 +341,7 @@ def handle_data():
     df = pd.DataFrame(output_data)
     excel_filename = f"{OUTPUT_DIR}/summary.xlsx"
     df.to_excel(excel_filename, index=False)
-    logging.info(f"Processing complete, result saved to {excel_filename}")
+    logging.info(f"处理完成，结果已保存到 {excel_filename}")
 
 
 def apply_fuzzy_rules(message):
@@ -351,11 +352,11 @@ def apply_fuzzy_rules(message):
 
 
 def main():
-    # Set up logging
+    # 设置日志记录
     log_file = setup_logging()
-    logging.info(f"Log file: {log_file}")
+    logging.info(f"日志文件：{log_file}")
 
-    # Read query, cookie and csrftoken from resources
+    # 从 resources 读取查询、cookie 和 csrftoken
     with open('resources/query.txt', 'r', encoding='utf-8') as f:
         query = f.read()
     with open('resources/cookie.txt', 'r', encoding='utf-8') as f:
@@ -363,25 +364,25 @@ def main():
     with open('resources/csrftoken.txt', 'r', encoding='utf-8') as f:
         csrftoken = f.read().strip()
     if not query or not cookie:
-        logging.error("query or cookie is empty, please check resources/query.txt and resources/cookie.txt.")
-    logging.info("Read query and cookie.")
+        logging.error("查询或 cookie 为空，请检查 resources/query.txt 和 resources/cookie.txt。")
+    logging.info("已读取查询和 cookie。")
 
-    # Get data for the past 7 days TODO
-    end_time = datetime.now() - timedelta(days=1)
-    start_time = end_time - timedelta(days=8)
+    # 获取过去 7 天的数据
+    end_time = datetime.now()
+    start_time = end_time - timedelta(days=7)
 
-    # Loop 7 times over consecutive 1-day windows and then aggregate
+    # 循环 7 次，处理连续的 1 天时间窗口，然后聚合
     for i in range(7):
         start_time_str = (start_time + timedelta(days=i)).strftime("%Y-%m-%dT%H:%M:%S.000")
         end_time_str = (start_time + timedelta(days=i + 1)).strftime("%Y-%m-%dT%H:%M:%S.000")
 
-        logging.info(f"Fetching data for day {i + 1}: {start_time_str} to {end_time_str}")
+        logging.info(f"正在获取第 {i + 1} 天的数据：{start_time_str} 到 {end_time_str}")
         temp_filename = make_request(query, cookie, csrftoken, start_time_str, end_time_str, i + 1)
-        logging.info(f"Data for day {i + 1} saved to {temp_filename}")
+        logging.info(f"第 {i + 1} 天的数据已保存到 {temp_filename}")
 
     handle_data()
 
 
 if __name__ == "__main__":
-    # main()
-    handle_data()
+    main()
+    # handle_data()
