@@ -44,7 +44,12 @@ FUZZY_RULES = [
     # Unable to redirect call CA3fefa01bd417d244e1fa1c21bd88a105: 400 - [400] {"code"=>20001, "message"=>"Bad Request", "more_info"=>"https://www.twilio.com/docs/errors/20001", "status"=>400}
     "Unable to redirect call .*",
     "No primary server is available in cluster: #<Cluster topology=ReplicaSetNoPrimary.*",
-    "The socket took over .* seconds to connect .*"
+    "The socket took over .* seconds to connect .*",
+    # Account '63cac9bd8cfef70a9dfdc194' has no UC Configs
+    "Account .* has no UC Configs",
+    # Errno::ECONNRESET: Connection reset by peer (for 89.194.204.150:27017 (infra-prd-td-us-1-gener-shard-00-04.9c2kr.mongodb.net:27017, TLS)) (on infra-prd-td-us-1-gener-shard-00-04.9c2kr.mongodb.net:27017, connection 3:5)
+    "Errno::ECONNRESET: Connection reset by peer .*",
+    "[HTTP 400] 400 : Unable to update record.*"
 ]
 
 
