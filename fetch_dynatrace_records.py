@@ -11,18 +11,53 @@ from urllib.parse import urlencode
 import pandas as pd
 import requests
 
+
 ##################### 全局变量开始 #####################
+
+def get_previous_workday(current_date):
+    """
+    获取指定日期的上一个工作日
+    跳过周末（周六、周日）
+    
+    Args:
+        current_date: datetime对象，当前日期
+    
+    Returns:
+        datetime对象，上一个工作日
+    """
+    previous_day = current_date - timedelta(days=1)
+
+    # 如果上一天是周六(5)或周日(6)，继续往前找
+    while previous_day.weekday() >= 5:  # 周一=0, 周日=6
+        previous_day = previous_day - timedelta(days=1)
+
+    return previous_day
+
+
+def get_workday_dates():
+    """
+    获取当前日期和上一个工作日的日期
+    
+    Returns:
+        tuple: (当前日期, 上一个工作日)
+    """
+    today = datetime.now()
+    previous_workday = get_previous_workday(today)
+
+    return today, previous_workday
+
 
 #  TODO 测试
 # TODAY_STR = "20251014"
-TODAY_STR = datetime.now().strftime('%Y%m%d')
-
-LAST_DAY_STR = (datetime.now() - timedelta(days=1)).strftime('%Y%m%d')
+today, previous_workday = get_workday_dates()
+TODAY_STR = today.strftime('%Y%m%d')
+PREVIOUS_WORKDAY_STR = previous_workday.strftime('%Y%m%d')
 
 OUTPUT_DIR = f"output/{TODAY_STR}"
-LAST_OUTPUT_DIR = f"output/{LAST_DAY_STR}"
+PREVIOUS_WORKDAY_OUTPUT_DIR = f"output/{PREVIOUS_WORKDAY_STR}"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(PREVIOUS_WORKDAY_OUTPUT_DIR, exist_ok=True)
 
 # 查询结果轮询间隔（秒）
 POLL_INTERVAL = 10
@@ -80,7 +115,7 @@ agents = [
 ]
 
 
-def make_request(query, cookie, csrftoken, start_time_str, end_time_str, day_num):
+def make_request(query, cookie, csrftoken, start_time_str, end_time_str, day_num, output_dir):
     # 执行 DQL 请求
     api1_url = "https://wyv31614.live.dynatrace.com/rest/v2/logmonitoring/dql/query:execute"
     user_agent = random.choice(agents)
@@ -104,7 +139,7 @@ def make_request(query, cookie, csrftoken, start_time_str, end_time_str, day_num
         response1.raise_for_status()
         api1_result = response1.json()
 
-        output_filename = f'{OUTPUT_DIR}/dql_result_for_day_{day_num}.json'
+        output_filename = f'{output_dir}/dql_result_for_day_{day_num}.json'
 
         request_token = api1_result.get("requestToken")
 
@@ -167,42 +202,41 @@ def make_request(query, cookie, csrftoken, start_time_str, end_time_str, day_num
 
 def handle_data():
     # 聚合：合并输出目录中的所有 JSON 文件
-    # 过去第1天的数据
-    records_1_day = []
-    with open(f"{OUTPUT_DIR}/dql_result_for_day_8.json", 'r') as f:
-        records_1_day = json.load(f)
-
-    # 过去第2天的数据
-    records_2_day = []
-    with open(f"{OUTPUT_DIR}/dql_result_for_day_7.json", 'r') as f:
-        records_2_day = json.load(f)
-
-    # 过去第1-7天的数据
-    records_1_to_7_days = []
-    for day in range(2, 9):
-        with open(f"{OUTPUT_DIR}/dql_result_for_day_{day}.json", 'r') as f:
-            day_records = json.load(f)
-            records_1_to_7_days.extend(day_records)
-    output_filename_1_7 = f"{OUTPUT_DIR}/merged_1_to_7_days.json"
-    with open(output_filename_1_7, 'w') as f:
-        json.dump(records_1_to_7_days, f, indent=4)
-    logging.info(f"已合并过去第1-7天的数据到 {output_filename_1_7}")
-
-    # 过去第2-8天的数据
-    records_2_to_8_days = []
+    # 今天往前推7天的数据
+    records_current_7_days = []
     for day in range(1, 8):
         with open(f"{OUTPUT_DIR}/dql_result_for_day_{day}.json", 'r') as f:
             day_records = json.load(f)
-            records_2_to_8_days.extend(day_records)
-    output_filename_2_8 = f"{OUTPUT_DIR}/merged_2_to_8_days.json"
-    with open(output_filename_2_8, 'w') as f:
-        json.dump(records_2_to_8_days, f, indent=4)
-    logging.info(f"已合并过去第2-8天的数据到 {output_filename_2_8}")
+            records_current_7_days.extend(day_records)
+    output_filename_current = f"{OUTPUT_DIR}/merged_current_7_days.json"
+    with open(output_filename_current, 'w') as f:
+        json.dump(records_current_7_days, f, indent=4)
+    logging.info(f"已合并今天往前推7天的数据到 {output_filename_current}")
 
-    # 先聚合所有数据，数量先不算
+    # 上一个工作日往前推7天的数据
+    records_previous_7_days = []
+    for day in range(1, 8):
+        with open(f"{PREVIOUS_WORKDAY_OUTPUT_DIR}/dql_result_for_day_{day}.json", 'r') as f:
+            day_records = json.load(f)
+            records_previous_7_days.extend(day_records)
+    output_filename_previous = f"{OUTPUT_DIR}/merged_previous_workday_7_days.json"
+    with open(output_filename_previous, 'w') as f:
+        json.dump(records_previous_7_days, f, indent=4)
+    logging.info(f"已合并上一个工作日往前推7天的数据到 {output_filename_previous}")
+
+    # 今天往前推1天的数据（最新的1天）
+    records_current_1_day = []
+    with open(f"{OUTPUT_DIR}/dql_result_for_day_7.json", 'r') as f:
+        records_current_1_day = json.load(f)
+
+    # 上一个工作日往前推1天的数据（上一个工作日的最新1天）
+    records_previous_1_day = []
+    with open(f"{PREVIOUS_WORKDAY_OUTPUT_DIR}/dql_result_for_day_7.json", 'r') as f:
+        records_previous_1_day = json.load(f)
+
     # 处理数据：按 span.events.exception.message 分组，合并唯一的应用和堆栈跟踪值，求和 count()
     result = {}
-    all_records = records_1_day + records_2_to_8_days
+    all_records = records_current_7_days + records_previous_7_days
     for record in all_records:
         app = record.get("app", "Unknown App")
         message = record.get("span.events.exception.message", "No Exception Message") or ""
@@ -216,8 +250,8 @@ def handle_data():
             result[message] = {
                 "apps": set(),
                 "stacktraces": set(),
-                "last_7_days_count": 0,
-                "pre_last_7_days_count": 0,
+                "current_7_days_count": 0,
+                "previous_workday_7_days_count": 0,
                 "last_1_day_count": 0,
                 "pre_last_1_day_count": 0,
             }
@@ -226,30 +260,30 @@ def handle_data():
         result[message]["stacktraces"].add(stacktrace)
 
     # 计算数量
-    # 过去1天的数据，从records_1_day中匹配，遍历result，然后累加count()的值
+    # 今天往前推7天的数据
     for message in result.keys():
-        # 过去1天的数据
-        for record in records_1_day:
+        for record in records_current_7_days:
+            record_message = record.get("span.events.exception.message", "No Exception Message") or ""
+            if record_message == message:
+                result[message]["current_7_days_count"] += int(record.get("count()", 0))
+
+        # 上一个工作日往前推7天的数据
+        for record in records_previous_7_days:
+            record_message = record.get("span.events.exception.message", "No Exception Message") or ""
+            if record_message == message:
+                result[message]["previous_workday_7_days_count"] += int(record.get("count()", 0))
+
+        # 今天往前推1天的数据
+        for record in records_current_1_day:
             record_message = record.get("span.events.exception.message", "No Exception Message") or ""
             if record_message == message:
                 result[message]["last_1_day_count"] += int(record.get("count()", 0))
-        # 过去第2天的数据
-        for record in records_2_day:
+
+        # 上一个工作日往前推1天的数据
+        for record in records_previous_1_day:
             record_message = record.get("span.events.exception.message", "No Exception Message") or ""
             if record_message == message:
                 result[message]["pre_last_1_day_count"] += int(record.get("count()", 0))
-
-    # 过去2-8天的数据，从records_2_to_8_days中匹配，然后累加
-    for message in result.keys():
-        for record in records_1_to_7_days:
-            record_message = record.get("span.events.exception.message", "No Exception Message") or ""
-            if record_message == message:
-                result[message]["last_7_days_count"] += int(record.get("count()", 0))
-        # 过去第2-7天的数据
-        for record in records_2_to_8_days:
-            record_message = record.get("span.events.exception.message", "No Exception Message") or ""
-            if record_message == message:
-                result[message]["pre_last_7_days_count"] += int(record.get("count()", 0))
 
     # 聚合消息分类
     categorized_result = {}
@@ -260,24 +294,24 @@ def handle_data():
                 "apps": set(),
                 "stacktraces": set(),
                 "raw_messages": set(),
-                "last_7_days_count": 0,
-                "pre_last_7_days_count": 0,
+                "current_7_days_count": 0,
+                "previous_workday_7_days_count": 0,
                 "last_1_day_count": 0,
-                "pre_last_1_day_count": 0
+                "pre_last_1_day_count": 0,
             }
 
         categorized_result[new_message]["raw_messages"].add(message)
         categorized_result[new_message]["apps"].update(details["apps"])
         categorized_result[new_message]["stacktraces"].update(details["stacktraces"])
-        categorized_result[new_message]["last_7_days_count"] += details["last_7_days_count"]
-        categorized_result[new_message]["pre_last_7_days_count"] += details["pre_last_7_days_count"]
+        categorized_result[new_message]["current_7_days_count"] += details["current_7_days_count"]
+        categorized_result[new_message]["previous_workday_7_days_count"] += details["previous_workday_7_days_count"]
         categorized_result[new_message]["last_1_day_count"] += details["last_1_day_count"]
         categorized_result[new_message]["pre_last_1_day_count"] += details["pre_last_1_day_count"]
     result = categorized_result
     logging.info(f"分类后，有 {len(result)} 种异常消息类型。")
 
     # 将结果转换为列表并排序
-    sorted_result = sorted(result.items(), key=lambda x: x[1]["stacktraces"], reverse=True)
+    sorted_result = sorted(result.items(), key=lambda x: x[1]["current_7_days_count"], reverse=True)
     # 输出到 Excel 文件
     output_data = []
     for message, details in sorted_result:
@@ -291,8 +325,8 @@ def handle_data():
         details["stacktraces"] = {st if st is not None else "" for st in details["stacktraces"]}
         details["raw_messages"] = {rm if rm is not None else "" for rm in details["raw_messages"]}
 
-        # 判断是否为新异常：如果过去1天有出现，但过去2-8天没有出现
-        if details["last_1_day_count"] > 0 and details["pre_last_7_days_count"] == 0:
+        # 判断是否为新异常：如果当前7天有出现，但上一个工作日往前7天没有出现
+        if details["current_7_days_count"] > 0 and details["previous_workday_7_days_count"] == 0:
             details["is_new"] = True
         else:
             details["is_new"] = False
@@ -302,8 +336,8 @@ def handle_data():
             "exception message(exp)": message.replace(".*", "******").strip(),
             "raw messages": "\n\n".join(details["raw_messages"]).strip(),
             "exception stacktrace": "\n\n".join(details["stacktraces"]).strip(),
-            "quantity for the last 7 days": str(details["last_7_days_count"]) + "\n" +
-                                            f"prev: {str(details['pre_last_7_days_count'])}",
+            "quantity for the last 7 days": str(details["current_7_days_count"]) + "\n" +
+                                            f"prev: {str(details['previous_workday_7_days_count'])}",
             "quantity for the previous day": str(details.get("last_1_day_count", 0)) + "\n" +
                                              f"prev: {str(details['pre_last_1_day_count'])}",
             "is_new": "YES" if details.get("is_new") else ""
@@ -312,6 +346,9 @@ def handle_data():
     excel_filename = f"{OUTPUT_DIR}/summary.xlsx"
     df.to_excel(excel_filename, index=False)
     logging.info(f"处理完成，结果已保存到 {excel_filename}")
+    logging.info(f"对比数据说明：")
+    logging.info(f"  - 当前7天数据：{today.strftime('%Y-%m-%d')} 往前推7天")
+    logging.info(f"  - 上一个工作日7天数据：{previous_workday.strftime('%Y-%m-%d')} 往前推7天")
 
 
 # 功能：应用模糊匹配规则
@@ -320,6 +357,44 @@ def apply_fuzzy_rules(message):
         if re.fullmatch(rule, message.strip(), flags=re.DOTALL):
             return rule
     return message
+
+
+def get_unique_date_ranges():
+    """
+    计算需要获取数据的所有唯一日期，避免重复请求
+    
+    Returns:
+        dict: {date_str: {'date': date_obj, 'needed_for': [('current', day_num), ('previous', day_num)]}}
+    """
+    unique_dates = {}
+
+    # 今天往前推7天的数据
+    today_start = today - timedelta(days=7)
+    for i in range(7):
+        date_obj = today_start + timedelta(days=i)
+        date_str = date_obj.strftime('%Y-%m-%d')
+
+        if date_str not in unique_dates:
+            unique_dates[date_str] = {
+                'date': date_obj,
+                'needed_for': []
+            }
+        unique_dates[date_str]['needed_for'].append(('current', i + 1))
+
+    # 上一个工作日往前推7天的数据
+    previous_start = previous_workday - timedelta(days=7)
+    for i in range(7):
+        date_obj = previous_start + timedelta(days=i)
+        date_str = date_obj.strftime('%Y-%m-%d')
+
+        if date_str not in unique_dates:
+            unique_dates[date_str] = {
+                'date': date_obj,
+                'needed_for': []
+            }
+        unique_dates[date_str]['needed_for'].append(('previous', i + 1))
+
+    return unique_dates
 
 
 def main():
@@ -338,27 +413,73 @@ def main():
         logging.error("查询或 cookie 为空，请检查 resources/query.txt 和 resources/cookie.txt。")
     logging.info("已读取查询和 cookie。")
 
-    # 获取过去 8 天的数据
-    end_time = datetime.now()
-    start_time = end_time - timedelta(days=8)
+    logging.info(f"今天是：{today.strftime('%Y-%m-%d %A')}")
+    logging.info(f"上一个工作日是：{previous_workday.strftime('%Y-%m-%d %A')}")
 
-    # 循环 8 次，处理连续的 1 天时间窗口，然后聚合
-    # 后面好做数据对比
-    for i in range(8):
+    # 计算所有需要获取的唯一日期2
+    unique_dates = get_unique_date_ranges()
+    total_requests = len(unique_dates)
+    duplicate_saved = 14 - total_requests  # 总共14个请求减去实际需要的请求数
+
+    logging.info(f"优化后需要 {total_requests} 个请求（节省了 {duplicate_saved} 个重复请求）")
+
+    # 存储请求结果的映射
+    date_to_data = {}
+
+    # 按日期排序，统一获取数据
+    sorted_dates = sorted(unique_dates.items())
+
+    for date_str, date_info in sorted_dates:
+        date_obj = date_info['date']
+        needed_for = date_info['needed_for']
+
         # 设置开始、结束时间的小时数为 10:00:00
-        start_time_str = (start_time + timedelta(days=i)).strftime("%Y-%m-%dT%H:%M:%S.000")
-        end_time_str = (start_time + timedelta(days=i + 1)).strftime("%Y-%m-%dT%H:%M:%S.000")
+        start_time_str = date_obj.strftime("%Y-%m-%dT10:00:00.000")
+        end_time_str = (date_obj + timedelta(days=1)).strftime("%Y-%m-%dT10:00:00.000")
 
-        start_time_str = start_time_str[:11] + "10:00:00.000"
-        end_time_str = end_time_str[:11] + "10:00:00.000"
+        logging.info(f"正在获取 {date_str} 的数据，需要用于：{needed_for}")
 
-        logging.info(f"正在获取第 {i + 1} 天的数据：{start_time_str} 到 {end_time_str}")
-        temp_filename = make_request(query, cookie, csrftoken, start_time_str, end_time_str, i + 1)
-        logging.info(f"第 {i + 1} 天的数据已保存到 {temp_filename}")
+        # 使用临时文件名，稍后会复制到相应位置
+        temp_output_dir = "temp_data"
+        os.makedirs(temp_output_dir, exist_ok=True)
+
+        temp_filename = make_request(query, cookie, csrftoken, start_time_str, end_time_str,
+                                     date_str.replace('-', ''), temp_output_dir)
+
+        if temp_filename:
+            # 读取数据
+            with open(temp_filename, 'r') as f:
+                data = json.load(f)
+            date_to_data[date_str] = data
+            logging.info(f"{date_str} 的数据获取成功")
+        else:
+            logging.error(f"{date_str} 的数据获取失败")
+            date_to_data[date_str] = []
+
+    # 将数据复制到相应的目录和文件名
+    for date_str, date_info in unique_dates.items():
+        data = date_to_data.get(date_str, [])
+
+        for dataset_type, day_num in date_info['needed_for']:
+            if dataset_type == 'current':
+                output_dir = OUTPUT_DIR
+                logging.info(f"保存 {date_str} 数据到今天数据集第 {day_num} 天")
+            else:  # previous
+                output_dir = PREVIOUS_WORKDAY_OUTPUT_DIR
+                logging.info(f"保存 {date_str} 数据到上一个工作日数据集第 {day_num} 天")
+
+            output_filename = f'{output_dir}/dql_result_for_day_{day_num}.json'
+            with open(output_filename, 'w') as f:
+                json.dump(data, f, indent=4)
+
+    # 清理临时目录
+    import shutil
+    if os.path.exists("temp_data"):
+        shutil.rmtree("temp_data")
 
     handle_data()
 
 
 if __name__ == "__main__":
-    main()
-    # handle_data()
+    # main()
+    handle_data()
