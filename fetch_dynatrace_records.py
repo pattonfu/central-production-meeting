@@ -49,7 +49,7 @@ FUZZY_RULES = [
     "Account .* has no UC Configs",
     # Errno::ECONNRESET: Connection reset by peer (for 89.194.204.150:27017 (infra-prd-td-us-1-gener-shard-00-04.9c2kr.mongodb.net:27017, TLS)) (on infra-prd-td-us-1-gener-shard-00-04.9c2kr.mongodb.net:27017, connection 3:5)
     "Errno::ECONNRESET: Connection reset by peer .*",
-    "[HTTP 400] 400 : Unable to update record.*"
+    r"\[HTTP 400\] 400 : Unable to update record.*",
 ]
 
 
@@ -314,9 +314,10 @@ def handle_data():
     logging.info(f"处理完成，结果已保存到 {excel_filename}")
 
 
+# 功能：应用模糊匹配规则
 def apply_fuzzy_rules(message):
     for rule in FUZZY_RULES:
-        if re.fullmatch(rule, message.strip()):
+        if re.fullmatch(rule, message.strip(), flags=re.DOTALL):
             return rule
     return message
 
