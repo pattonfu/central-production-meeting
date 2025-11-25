@@ -85,6 +85,10 @@ FUZZY_RULES = [
     # Errno::ECONNRESET: Connection reset by peer (for 89.194.204.150:27017 (infra-prd-td-us-1-gener-shard-00-04.9c2kr.mongodb.net:27017, TLS)) (on infra-prd-td-us-1-gener-shard-00-04.9c2kr.mongodb.net:27017, connection 3:5)
     "Errno::ECONNRESET: Connection reset by peer .*",
     r"\[HTTP 400\] 400 : Unable to update record.*",
+    r"\[HTTP 404\] 20404 : Unable to update record.*",
+    r"\[211:KeyNotFound\]: No keys found for HMAC that is valid for time.*",
+    # Could not select a phone to call +917003598989
+    r"Could not select a phone to call .*",
 ]
 
 
@@ -481,5 +485,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # main()
-    handle_data()
+    main()
+    # handle_data()
