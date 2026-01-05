@@ -8,29 +8,39 @@ import traceback
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
+import holidays
 import pandas as pd
 import requests
 
-
 ##################### 全局变量开始 #####################
+
+# 获取中国节假日
+cn_holidays = holidays.CN()
+
 
 def get_previous_workday(current_date):
     """
     获取指定日期的上一个工作日
-    跳过周末（周六、周日）
-    
+    跳过节假日和普通周末，但包括调休的周末工作日
+
     Args:
         current_date: datetime对象，当前日期
-    
+
     Returns:
         datetime对象，上一个工作日
     """
     previous_day = current_date - timedelta(days=1)
-
-    # 如果上一天是周六(5)或周日(6)，继续往前找
-    while previous_day.weekday() >= 5:  # 周一=0, 周日=6
-        previous_day = previous_day - timedelta(days=1)
-
+    # 循环直到找到一个工作日。
+    # 工作日的定义是：
+    # 1. 是周一到周五，且不是法定节假日。
+    # 2. 是周末，但是是调休的工作日（即不在节假日列表中）。
+    #
+    # 所以，非工作日的定义是：
+    # 1. 是法定节假日。
+    # 2. 是周末，且不是调休的工作日（即它就是一个普通的周末，或者本身是节假日）。
+    #    由于调休的周末不在cn_holidays里，所以 `previous_day in cn_holidays` 可以同时覆盖“是法定节假日”和“是普通周末”的情况。
+    while previous_day in cn_holidays:
+        previous_day -= timedelta(days=1)
     return previous_day
 
 
