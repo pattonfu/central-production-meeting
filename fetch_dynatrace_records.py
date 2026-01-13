@@ -99,6 +99,8 @@ FUZZY_RULES = [
     r"\[211:KeyNotFound\]: No keys found for HMAC that is valid for time.*",
     # Could not select a phone to call +917003598989
     r"Could not select a phone to call .*",
+    # Failed unlocking: Lock not found. Name: 997bda6274cb49dd8919d84e40eb2153, LockClass: Central::Locking::RedlockLocker
+    r"Failed unlocking: Lock not found\. Name: .*, LockClass: .*",
 ]
 
 
@@ -495,5 +497,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
-    # handle_data()
+    # main()
+    handle_data()
