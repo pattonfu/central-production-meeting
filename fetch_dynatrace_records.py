@@ -497,5 +497,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # main()
-    handle_data()
+    main()
+    # handle_data()
